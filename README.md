@@ -38,7 +38,7 @@ Deploy the exported `handler` in your AWS Lambda function behind an API Gateway 
 | ----------------- | -------- | -------------------------------------------------------------------------------------------- |
 | `senderEmail`     | ✅       | Email address shown as the sender when SES sends the message.                                |
 | `recipientEmail`  | ✅       | Destination address that receives the forwarded message.                                     |
-| `region`          | ➖       | AWS region for the SES v2 client (defaults to `us-west-2`).                                   |
+| `region`          | ➖       | AWS region for the SES client (defaults to `us-west-2`).                                      |
 | `recaptchaSecret` | ➖       | Secret key for Google reCAPTCHA v2/v3 verification. Set to `undefined` to disable checks.    |
 | `skipRecaptcha`   | ➖       | Set to `true` to bypass reCAPTCHA verification without supplying a secret (useful in tests). |
 | `disableSend`     | ➖       | When `true`, skips the SES send call but still returns success (useful in CI/test).          |

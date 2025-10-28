@@ -3,14 +3,14 @@ import addFormats from "ajv-formats";
 import ajvKeywords from "ajv-keywords";
 import nodemailer, {} from "nodemailer";
 import busboy from "busboy";
-import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import { SESClient, SendRawEmailCommand } from "@aws-sdk/client-ses";
 import https from "https";
 import querystring from "querystring";
 const ajv = new Ajv();
 addFormats(ajv);
 ajvKeywords(ajv);
 export const createSendMailHandler = (config) => {
-    const sesClient = new SESv2Client({ region: config.region || "us-west-2" });
+    const sesClient = new SESClient({ region: config.region || "us-west-2" });
     const schema = {
         type: "object",
         properties: {
@@ -129,7 +129,12 @@ function extractMultipart(event) {
 }
 function createSesTransport(sesClient) {
     const options = {
-        SES: { sesClient, SendEmailCommand },
+        SES: {
+            ses: sesClient,
+            aws: {
+                SendRawEmailCommand,
+            },
+        },
     };
     return nodemailer.createTransport(options);
 }

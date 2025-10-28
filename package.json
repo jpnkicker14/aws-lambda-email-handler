@@ -1,6 +1,6 @@
 {
   "name": "aws-lambda-ses-mailer",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Reusable AWS Lambda email handler with SES and reCAPTCHA verification",
   "type": "module",
   "main": "./dist/sendMailHandler.js",
@@ -17,7 +17,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "dependencies": {
-    "@aws-sdk/client-sesv2": "^3.700.0",
+    "@aws-sdk/client-ses": "^3.700.0",
     "ajv": "^8.17.0",
     "ajv-formats": "^3.0.1",
     "ajv-keywords": "^5.1.0",

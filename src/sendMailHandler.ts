@@ -4,7 +4,7 @@ import ajvKeywords from "ajv-keywords";
 import type { APIGatewayEvent, Callback, Context, Handler } from "aws-lambda";
 import nodemailer, { type SendMailOptions, type TransportOptions, type Transporter } from "nodemailer";
 import busboy from "busboy";
-import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import { SESClient, SendRawEmailCommand } from "@aws-sdk/client-ses";
 import https from "https";
 import querystring from "querystring";
 
@@ -35,7 +35,7 @@ export interface PostBody {
 }
 
 export const createSendMailHandler = (config: SendMailConfig): Handler => {
-    const sesClient = new SESv2Client({ region: config.region || "us-west-2" });
+    const sesClient = new SESClient({ region: config.region || "us-west-2" });
 
     const schema = {
         type: "object",
@@ -179,11 +179,16 @@ function extractMultipart(event: APIGatewayEvent): Promise<PostBody> {
     });
 }
 
-function createSesTransport(sesClient: SESv2Client): Transporter {
+function createSesTransport(sesClient: SESClient): Transporter {
     const options = {
-        SES: { sesClient, SendEmailCommand },
-    };
-    return nodemailer.createTransport(options as unknown as TransportOptions);
+        SES: {
+            ses: sesClient,
+            aws: {
+                SendRawEmailCommand,
+            },
+        },
+    } satisfies Record<string, unknown>;
+    return nodemailer.createTransport(options as TransportOptions);
 }
 
 async function verifyRecaptchaToken(token: string, secret?: string) {

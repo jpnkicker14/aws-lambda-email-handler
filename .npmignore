@@ -1,0 +1,6 @@
+src/
+__tests__/
+*.spec.ts
+tsconfig.json
+jest.config.ts
+node_modules/
