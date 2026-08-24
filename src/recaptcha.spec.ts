@@ -189,3 +189,134 @@ describe("reCAPTCHA v3 verification", () => {
         expect(logged).not.toContain("a-secret");
     });
 });
+
+const BOUNDARY = "bnd42";
+
+const multipartBody = (fields: Record<string, string>) => {
+    let b = "";
+    for (const [k, v] of Object.entries(fields))
+        b += `--${BOUNDARY}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`;
+    return b + `--${BOUNDARY}--\r\n`;
+};
+
+const buildMultipartEvent = (fields: Record<string, string>): APIGatewayEvent =>
+    ({
+        resource: "/",
+        path: "/careers",
+        httpMethod: "POST",
+        headers: { "Content-Type": `multipart/form-data; boundary=${BOUNDARY}` },
+        multiValueHeaders: {},
+        queryStringParameters: null,
+        multiValueQueryStringParameters: null,
+        pathParameters: null,
+        stageVariables: null,
+        requestContext: {} as never,
+        body: multipartBody(fields),
+        isBase64Encoded: false,
+    }) as APIGatewayEvent;
+
+const CAREER_BODY = {
+    name: "Jane Doe",
+    email: "jane@example.com",
+    subject: "Applicant for Tax Accountant",
+    message: "Please consider me.",
+    recaptcha: "a-token",
+};
+
+describe("expected action routing by content type", () => {
+    const actions = {
+        recaptchaExpectedAction: "contact_form",
+        recaptchaMultipartAction: "career_form",
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        jest.spyOn(console, "warn").mockImplementation(() => {});
+        jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    it("expects contact_form for a JSON submission", async () => {
+        stubSiteVerify({ success: true, score: 0.9, action: "contact_form" });
+
+        const response = await invoke(makeHandler(actions), buildEvent(VALID_BODY));
+
+        expect(response.statusCode).toBe(200);
+    });
+
+    it("expects career_form for a multipart submission", async () => {
+        stubSiteVerify({ success: true, score: 0.9, action: "career_form" });
+
+        const response = await invoke(
+            makeHandler(actions),
+            buildMultipartEvent(CAREER_BODY)
+        );
+
+        expect(response.statusCode).toBe(200);
+    });
+
+    it("rejects a contact_form token replayed at the multipart form", async () => {
+        stubSiteVerify({ success: true, score: 0.9, action: "contact_form" });
+
+        const response = await invoke(
+            makeHandler(actions),
+            buildMultipartEvent(CAREER_BODY)
+        );
+
+        expect(response.statusCode).toBe(400);
+    });
+
+    it("rejects a career_form token replayed at the JSON form", async () => {
+        stubSiteVerify({ success: true, score: 0.9, action: "career_form" });
+
+        const response = await invoke(makeHandler(actions), buildEvent(VALID_BODY));
+
+        expect(response.statusCode).toBe(400);
+    });
+
+    it("falls back to recaptchaExpectedAction when no multipart action is set", async () => {
+        stubSiteVerify({ success: true, score: 0.9, action: "contact_form" });
+
+        const response = await invoke(
+            makeHandler({ recaptchaExpectedAction: "contact_form" }),
+            buildMultipartEvent(CAREER_BODY)
+        );
+
+        expect(response.statusCode).toBe(200);
+    });
+});
+
+describe("submitter data never reaches the logs", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    it("does not log or echo the body when JSON is malformed", async () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+        const error = jest.spyOn(console, "error").mockImplementation(() => {});
+        stubSiteVerify({ success: true, score: 0.9, action: "contact_form" });
+
+        const event = buildEvent(VALID_BODY);
+        // Node embeds a slice of the input in JSON.parse error messages.
+        (event as { body: string }).body =
+            "name=Jane Q Applicant&email=jane.applicant@example.com";
+
+        const response = await invoke(makeHandler(), event);
+
+        const logged = [...warn.mock.calls, ...error.mock.calls]
+            .map((c) => c.join(" "))
+            .join("\n");
+
+        expect(response.statusCode).toBe(400);
+        expect(logged).not.toContain("Jane");
+        expect(logged).not.toContain("jane.applicant@example.com");
+        expect(JSON.stringify(response)).not.toContain("Jane");
+    });
+});

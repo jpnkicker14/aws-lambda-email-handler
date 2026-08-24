@@ -16,6 +16,12 @@ export interface SendMailConfig {
      * When set, a token issued for any other action is rejected.
      */
     recaptchaExpectedAction?: string;
+    /**
+     * Expected reCAPTCHA v3 action for multipart/form-data submissions
+     * (e.g. "career_form"), which typically come from a different form than
+     * JSON submissions. Falls back to `recaptchaExpectedAction` when unset.
+     */
+    recaptchaMultipartAction?: string;
 }
 export interface PostBody {
     name: string;

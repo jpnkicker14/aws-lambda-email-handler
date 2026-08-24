@@ -29,6 +29,12 @@ export interface SendMailConfig {
      * When set, a token issued for any other action is rejected.
      */
     recaptchaExpectedAction?: string;
+    /**
+     * Expected reCAPTCHA v3 action for multipart/form-data submissions
+     * (e.g. "career_form"), which typically come from a different form than
+     * JSON submissions. Falls back to `recaptchaExpectedAction` when unset.
+     */
+    recaptchaMultipartAction?: string;
 }
 
 export interface PostBody {
@@ -65,12 +71,25 @@ export const createSendMailHandler = (config: SendMailConfig): Handler => {
         try {
             const contentType =
                 event.headers["content-type"] || event.headers["Content-Type"];
+            const isMultipart = Boolean(
+                contentType && contentType.includes("multipart/form-data")
+            );
             let body: PostBody;
 
-            if (contentType && contentType.includes("multipart/form-data")) {
+            if (isMultipart) {
                 body = (await extractMultipart(event)) as any;
             } else {
-                body = JSON.parse(event.body ?? "");
+                try {
+                    body = JSON.parse(event.body ?? "");
+                } catch {
+                    // Node embeds a slice of the input in JSON.parse messages, so
+                    // neither the message nor the body is logged or echoed back.
+                    console.warn("Request body is not valid JSON; rejecting.");
+                    return cb(
+                        null,
+                        buildErrorResponse(new Error("Invalid input"), "Invalid input", 400)
+                    );
+                }
             }
 
             const valid = validate(body);
@@ -80,8 +99,16 @@ export const createSendMailHandler = (config: SendMailConfig): Handler => {
             }
 
             if (!config.skipRecaptcha) {
-                const verdict = await verifyRecaptchaToken(body.recaptcha, config);
+                const expectedAction = isMultipart
+                    ? (config.recaptchaMultipartAction ?? config.recaptchaExpectedAction)
+                    : config.recaptchaExpectedAction;
+                const verdict = await verifyRecaptchaToken(
+                    body.recaptcha,
+                    config,
+                    expectedAction
+                );
                 if (!verdict.ok) {
+                    // Reason, score and action only — never the token or the secret.
                     console.warn(`reCAPTCHA rejected: ${verdict.reason}`);
                     return cb(
                         null,
@@ -114,10 +141,16 @@ export const createSendMailHandler = (config: SendMailConfig): Handler => {
 
             return cb(null, buildSuccessResponse("Mail sent successfully"));
         } catch (err: any) {
-            console.error(err);
+            // Log the type, not the error text: messages derived from the request
+            // body can carry submitter data.
+            console.error(`Unhandled error in sendMail handler: ${err?.name ?? "Error"}`);
             return cb(
                 null,
-                buildErrorResponse(err, "Internal error, please try again later", 500)
+                buildErrorResponse(
+                    new Error("Internal error"),
+                    "Internal error, please try again later",
+                    500
+                )
             );
         }
     };
@@ -229,7 +262,8 @@ export interface RecaptchaVerdict {
  */
 async function verifyRecaptchaToken(
     token: string,
-    config: SendMailConfig
+    config: SendMailConfig,
+    expectedAction?: string
 ): Promise<RecaptchaVerdict> {
     const secret = config.recaptchaSecret;
     if (!secret) {
@@ -271,13 +305,10 @@ async function verifyRecaptchaToken(
     if (score < minScore) {
         return withDetails({ ok: false, reason: `low-score (${score} < ${minScore})` });
     }
-    if (
-        config.recaptchaExpectedAction !== undefined &&
-        action !== config.recaptchaExpectedAction
-    ) {
+    if (expectedAction !== undefined && action !== expectedAction) {
         return withDetails({
             ok: false,
-            reason: `action-mismatch (got ${action ?? "none"}, expected ${config.recaptchaExpectedAction})`,
+            reason: `action-mismatch (got ${action ?? "none"}, expected ${expectedAction})`,
         });
     }
 

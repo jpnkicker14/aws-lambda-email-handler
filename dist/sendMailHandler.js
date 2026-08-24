@@ -26,12 +26,21 @@ export const createSendMailHandler = (config) => {
     return async (event, _context, cb) => {
         try {
             const contentType = event.headers["content-type"] || event.headers["Content-Type"];
+            const isMultipart = Boolean(contentType && contentType.includes("multipart/form-data"));
             let body;
-            if (contentType && contentType.includes("multipart/form-data")) {
+            if (isMultipart) {
                 body = (await extractMultipart(event));
             }
             else {
-                body = JSON.parse(event.body ?? "");
+                try {
+                    body = JSON.parse(event.body ?? "");
+                }
+                catch {
+                    // Node embeds a slice of the input in JSON.parse messages, so
+                    // neither the message nor the body is logged or echoed back.
+                    console.warn("Request body is not valid JSON; rejecting.");
+                    return cb(null, buildErrorResponse(new Error("Invalid input"), "Invalid input", 400));
+                }
             }
             const valid = validate(body);
             if (!valid) {
@@ -39,8 +48,12 @@ export const createSendMailHandler = (config) => {
                 return cb(null, buildErrorResponse(new Error(msg), msg, 400));
             }
             if (!config.skipRecaptcha) {
-                const verdict = await verifyRecaptchaToken(body.recaptcha, config);
+                const expectedAction = isMultipart
+                    ? (config.recaptchaMultipartAction ?? config.recaptchaExpectedAction)
+                    : config.recaptchaExpectedAction;
+                const verdict = await verifyRecaptchaToken(body.recaptcha, config, expectedAction);
                 if (!verdict.ok) {
+                    // Reason, score and action only — never the token or the secret.
                     console.warn(`reCAPTCHA rejected: ${verdict.reason}`);
                     return cb(null, buildErrorResponse(new Error("Invalid reCAPTCHA"), "reCAPTCHA failed", 400));
                 }
@@ -68,8 +81,10 @@ export const createSendMailHandler = (config) => {
             return cb(null, buildSuccessResponse("Mail sent successfully"));
         }
         catch (err) {
-            console.error(err);
-            return cb(null, buildErrorResponse(err, "Internal error, please try again later", 500));
+            // Log the type, not the error text: messages derived from the request
+            // body can carry submitter data.
+            console.error(`Unhandled error in sendMail handler: ${err?.name ?? "Error"}`);
+            return cb(null, buildErrorResponse(new Error("Internal error"), "Internal error, please try again later", 500));
         }
     };
 };
@@ -152,7 +167,7 @@ const DEFAULT_MIN_SCORE = 0.5;
  *
  * Neither the token nor the secret is ever logged.
  */
-async function verifyRecaptchaToken(token, config) {
+async function verifyRecaptchaToken(token, config, expectedAction) {
     const secret = config.recaptchaSecret;
     if (!secret) {
         // Fail closed. A missing secret is a deployment fault, not a bypass.
@@ -190,11 +205,10 @@ async function verifyRecaptchaToken(token, config) {
     if (score < minScore) {
         return withDetails({ ok: false, reason: `low-score (${score} < ${minScore})` });
     }
-    if (config.recaptchaExpectedAction !== undefined &&
-        action !== config.recaptchaExpectedAction) {
+    if (expectedAction !== undefined && action !== expectedAction) {
         return withDetails({
             ok: false,
-            reason: `action-mismatch (got ${action ?? "none"}, expected ${config.recaptchaExpectedAction})`,
+            reason: `action-mismatch (got ${action ?? "none"}, expected ${expectedAction})`,
         });
     }
     return withDetails({ ok: true });
