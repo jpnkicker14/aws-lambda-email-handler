@@ -1,14 +1,14 @@
 {
   "name": "aws-lambda-ses-mailer",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "Reusable AWS Lambda email handler with SES and reCAPTCHA verification",
   "type": "module",
   "main": "./dist/sendMailHandler.js",
   "types": "./dist/sendMailHandler.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/sendMailHandler.js",
-      "require": "./dist/sendMailHandler.cjs"
+      "types": "./dist/sendMailHandler.d.ts",
+      "import": "./dist/sendMailHandler.js"
     }
   },
   "scripts": {

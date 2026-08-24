@@ -19,6 +19,16 @@ export interface SendMailConfig {
     senderEmail: string;
     recipientEmail: string;
     recaptchaSecret?: string;
+    /**
+     * Minimum reCAPTCHA v3 score (0.0-1.0) required to accept a submission.
+     * Defaults to 0.5. A v2 secret returns no score and is always rejected.
+     */
+    recaptchaMinScore?: number;
+    /**
+     * Expected reCAPTCHA v3 action for this endpoint (e.g. "contact_form").
+     * When set, a token issued for any other action is rejected.
+     */
+    recaptchaExpectedAction?: string;
 }
 
 export interface PostBody {
@@ -70,15 +80,14 @@ export const createSendMailHandler = (config: SendMailConfig): Handler => {
             }
 
             if (!config.skipRecaptcha) {
-                const verified = await verifyRecaptchaToken(
-                    body.recaptcha,
-                    config.recaptchaSecret
-                );
-                if (!verified)
+                const verdict = await verifyRecaptchaToken(body.recaptcha, config);
+                if (!verdict.ok) {
+                    console.warn(`reCAPTCHA rejected: ${verdict.reason}`);
                     return cb(
                         null,
                         buildErrorResponse(new Error("Invalid reCAPTCHA"), "reCAPTCHA failed", 400)
                     );
+                }
             }
 
             const mailOptions: SendMailOptions = {
@@ -191,14 +200,92 @@ function createSesTransport(sesClient: SESClient): Transporter {
     return nodemailer.createTransport(options as TransportOptions);
 }
 
-async function verifyRecaptchaToken(token: string, secret?: string) {
+const DEFAULT_MIN_SCORE = 0.5;
+
+interface SiteVerifyResponse {
+    success?: boolean;
+    score?: number;
+    action?: string;
+    "error-codes"?: string[];
+}
+
+export interface RecaptchaVerdict {
+    ok: boolean;
+    reason?: string;
+    score?: number;
+    action?: string;
+}
+
+/**
+ * Verifies a reCAPTCHA token against Google's siteverify endpoint.
+ *
+ * reCAPTCHA v3 never challenges the user and returns `success: true` for
+ * virtually any well-formed token, so `success` alone is not a meaningful
+ * check — the score and the action are. Every failure path rejects: a missing
+ * secret, a transport error, a malformed response, or a response carrying no
+ * score (which is what a v2 secret returns for a v3 token).
+ *
+ * Neither the token nor the secret is ever logged.
+ */
+async function verifyRecaptchaToken(
+    token: string,
+    config: SendMailConfig
+): Promise<RecaptchaVerdict> {
+    const secret = config.recaptchaSecret;
     if (!secret) {
-        console.warn("No reCAPTCHA secret configured — skipping verification.");
-        return true;
+        // Fail closed. A missing secret is a deployment fault, not a bypass.
+        console.error("No reCAPTCHA secret configured; rejecting submission.");
+        return { ok: false, reason: "missing-secret" };
     }
+    if (!token) {
+        return { ok: false, reason: "missing-token" };
+    }
+
+    const minScore = config.recaptchaMinScore ?? DEFAULT_MIN_SCORE;
     const postData = querystring.stringify({ secret, response: token });
 
-    return new Promise<boolean>((resolve, reject) => {
+    let payload: SiteVerifyResponse;
+    try {
+        payload = await postSiteVerify(postData);
+    } catch (err: any) {
+        console.error(`reCAPTCHA siteverify request failed: ${err?.message ?? err}`);
+        return { ok: false, reason: "request-failed" };
+    }
+
+    const score = payload.score;
+    const action = payload.action;
+    const withDetails = (verdict: RecaptchaVerdict): RecaptchaVerdict => ({
+        ...verdict,
+        ...(score === undefined ? {} : { score }),
+        ...(action === undefined ? {} : { action }),
+    });
+
+    if (payload.success !== true) {
+        // `invalid-input-secret` means the secret does not pair with the site key.
+        const codes = payload["error-codes"]?.join(",") || "none";
+        return withDetails({ ok: false, reason: `rejected-by-google (${codes})` });
+    }
+    if (typeof score !== "number") {
+        return withDetails({ ok: false, reason: "missing-score" });
+    }
+    if (score < minScore) {
+        return withDetails({ ok: false, reason: `low-score (${score} < ${minScore})` });
+    }
+    if (
+        config.recaptchaExpectedAction !== undefined &&
+        action !== config.recaptchaExpectedAction
+    ) {
+        return withDetails({
+            ok: false,
+            reason: `action-mismatch (got ${action ?? "none"}, expected ${config.recaptchaExpectedAction})`,
+        });
+    }
+
+    return withDetails({ ok: true });
+}
+
+function postSiteVerify(postData: string): Promise<SiteVerifyResponse> {
+    return new Promise<SiteVerifyResponse>((resolve, reject) => {
         const req = https.request(
             {
                 hostname: "www.google.com",
@@ -208,20 +295,21 @@ async function verifyRecaptchaToken(token: string, secret?: string) {
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Content-Length": Buffer.byteLength(postData),
                 },
+                timeout: 5000,
             },
             (res) => {
                 let data = "";
                 res.on("data", (chunk) => (data += chunk));
                 res.on("end", () => {
                     try {
-                        const json = JSON.parse(data);
-                        resolve(json.success);
+                        resolve(JSON.parse(data) as SiteVerifyResponse);
                     } catch (err) {
                         reject(err);
                     }
                 });
             }
         );
+        req.on("timeout", () => req.destroy(new Error("siteverify timed out")));
         req.on("error", reject);
         req.write(postData);
         req.end();

@@ -39,9 +39,11 @@ export const createSendMailHandler = (config) => {
                 return cb(null, buildErrorResponse(new Error(msg), msg, 400));
             }
             if (!config.skipRecaptcha) {
-                const verified = await verifyRecaptchaToken(body.recaptcha, config.recaptchaSecret);
-                if (!verified)
+                const verdict = await verifyRecaptchaToken(body.recaptcha, config);
+                if (!verdict.ok) {
+                    console.warn(`reCAPTCHA rejected: ${verdict.reason}`);
                     return cb(null, buildErrorResponse(new Error("Invalid reCAPTCHA"), "reCAPTCHA failed", 400));
+                }
             }
             const mailOptions = {
                 from: config.senderEmail,
@@ -138,12 +140,66 @@ function createSesTransport(sesClient) {
     };
     return nodemailer.createTransport(options);
 }
-async function verifyRecaptchaToken(token, secret) {
+const DEFAULT_MIN_SCORE = 0.5;
+/**
+ * Verifies a reCAPTCHA token against Google's siteverify endpoint.
+ *
+ * reCAPTCHA v3 never challenges the user and returns `success: true` for
+ * virtually any well-formed token, so `success` alone is not a meaningful
+ * check — the score and the action are. Every failure path rejects: a missing
+ * secret, a transport error, a malformed response, or a response carrying no
+ * score (which is what a v2 secret returns for a v3 token).
+ *
+ * Neither the token nor the secret is ever logged.
+ */
+async function verifyRecaptchaToken(token, config) {
+    const secret = config.recaptchaSecret;
     if (!secret) {
-        console.warn("No reCAPTCHA secret configured — skipping verification.");
-        return true;
+        // Fail closed. A missing secret is a deployment fault, not a bypass.
+        console.error("No reCAPTCHA secret configured; rejecting submission.");
+        return { ok: false, reason: "missing-secret" };
     }
+    if (!token) {
+        return { ok: false, reason: "missing-token" };
+    }
+    const minScore = config.recaptchaMinScore ?? DEFAULT_MIN_SCORE;
     const postData = querystring.stringify({ secret, response: token });
+    let payload;
+    try {
+        payload = await postSiteVerify(postData);
+    }
+    catch (err) {
+        console.error(`reCAPTCHA siteverify request failed: ${err?.message ?? err}`);
+        return { ok: false, reason: "request-failed" };
+    }
+    const score = payload.score;
+    const action = payload.action;
+    const withDetails = (verdict) => ({
+        ...verdict,
+        ...(score === undefined ? {} : { score }),
+        ...(action === undefined ? {} : { action }),
+    });
+    if (payload.success !== true) {
+        // `invalid-input-secret` means the secret does not pair with the site key.
+        const codes = payload["error-codes"]?.join(",") || "none";
+        return withDetails({ ok: false, reason: `rejected-by-google (${codes})` });
+    }
+    if (typeof score !== "number") {
+        return withDetails({ ok: false, reason: "missing-score" });
+    }
+    if (score < minScore) {
+        return withDetails({ ok: false, reason: `low-score (${score} < ${minScore})` });
+    }
+    if (config.recaptchaExpectedAction !== undefined &&
+        action !== config.recaptchaExpectedAction) {
+        return withDetails({
+            ok: false,
+            reason: `action-mismatch (got ${action ?? "none"}, expected ${config.recaptchaExpectedAction})`,
+        });
+    }
+    return withDetails({ ok: true });
+}
+function postSiteVerify(postData) {
     return new Promise((resolve, reject) => {
         const req = https.request({
             hostname: "www.google.com",
@@ -153,19 +209,20 @@ async function verifyRecaptchaToken(token, secret) {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Content-Length": Buffer.byteLength(postData),
             },
+            timeout: 5000,
         }, (res) => {
             let data = "";
             res.on("data", (chunk) => (data += chunk));
             res.on("end", () => {
                 try {
-                    const json = JSON.parse(data);
-                    resolve(json.success);
+                    resolve(JSON.parse(data));
                 }
                 catch (err) {
                     reject(err);
                 }
             });
         });
+        req.on("timeout", () => req.destroy(new Error("siteverify timed out")));
         req.on("error", reject);
         req.write(postData);
         req.end();
