@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/sendMailHandler.js",
   "types": "./dist/sendMailHandler.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/sendMailHandler.d.ts",
