@@ -43,6 +43,25 @@ Deploy the exported `handler` in your AWS Lambda function behind an API Gateway 
 | `skipRecaptcha`   | ➖       | Set to `true` to bypass reCAPTCHA verification without supplying a secret (useful in tests). |
 | `disableSend`     | ➖       | When `true`, skips the SES send call but still returns success (useful in CI/test).          |
 
+## IAM Permissions
+
+Mail is sent with the SES **v2** `SendEmail` API (`@aws-sdk/client-sesv2`), so the
+Lambda execution role must allow `ses:SendEmail`:
+
+```yaml
+Policies:
+  - Statement:
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+        Resource: "*"
+```
+
+The v1 action `ses:SendRawEmail` does **not** authorise this call. A role that
+only grants `ses:SendRawEmail` will build and test clean but fail at runtime with
+an `AccessDenied` error, so roles carried over from v2.x of this package need
+updating.
+
 The handler validates incoming payloads with AJV. A valid request must include:
 
 ```json
@@ -74,7 +93,17 @@ Before publishing, ensure `npm run build` completes without errors and that the 
 
 ## Testing Notes
 
-The included tests exercise the handler with `disableSend: true`. When writing your own tests, prefer the same flag or mock Nodemailer to avoid hitting SES.
+The suite covers payload validation, reCAPTCHA verification, multipart parsing
+with file attachments, and the SES send path, and runs on Node 20 and 22 in CI.
+
+Two approaches are used, and either works for your own tests:
+
+- **`disableSend: true`** skips the SES call entirely and still returns success.
+  Simplest when the SES call is not what you are testing.
+- **Stubbing `@aws-sdk/client-sesv2`** with `jest.unstable_mockModule`, as
+  `src/sesTransport.spec.ts` does, when you need to assert on what was actually
+  sent. The stub replaces `SESv2Client` and `SendEmailCommand`, so the real
+  nodemailer transport still runs and builds the raw message — no network calls.
 
 To generate a realistic event payload for manual testing, use the [API Gateway Lambda proxy](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html) structure and provide either a JSON body or a base64-encoded multipart payload.
 
