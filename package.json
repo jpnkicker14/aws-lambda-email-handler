@@ -1,6 +1,6 @@
 {
   "name": "aws-lambda-ses-mailer",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Reusable AWS Lambda email handler with SES and reCAPTCHA verification",
   "type": "module",
   "main": "./dist/sendMailHandler.js",
