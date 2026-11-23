@@ -43,6 +43,25 @@ Deploy the exported `handler` in your AWS Lambda function behind an API Gateway 
 | `skipRecaptcha`   | ➖       | Set to `true` to bypass reCAPTCHA verification without supplying a secret (useful in tests). |
 | `disableSend`     | ➖       | When `true`, skips the SES send call but still returns success (useful in CI/test).          |
 
+## IAM Permissions
+
+Mail is sent with the SES **v2** `SendEmail` API (`@aws-sdk/client-sesv2`), so the
+Lambda execution role must allow `ses:SendEmail`:
+
+```yaml
+Policies:
+  - Statement:
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+        Resource: "*"
+```
+
+The v1 action `ses:SendRawEmail` does **not** authorise this call. A role that
+only grants `ses:SendRawEmail` will build and test clean but fail at runtime with
+an `AccessDenied` error, so roles carried over from v2.x of this package need
+updating.
+
 The handler validates incoming payloads with AJV. A valid request must include:
 
 ```json
