@@ -42,4 +42,3 @@ export interface RecaptchaVerdict {
     score?: number;
     action?: string;
 }
-//# sourceMappingURL=sendMailHandler.d.ts.map

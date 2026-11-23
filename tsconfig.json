@@ -13,8 +13,12 @@
     ],
     "skipLibCheck": true,
     "declaration": true,
-    "declarationMap": true,
+    /* No declarationMap: it only points "go to definition" at src/*.ts, which
+       is not published, so for consumers it is a dangling file. */
     "sourceMap": true,
+    /* Embed sources in the maps: src/ is not published, so without this the
+       shipped maps point at files the package does not contain. */
+    "inlineSources": true,
     /* Strictness */
     "strict": true,
     "noUncheckedIndexedAccess": true,
