@@ -47,6 +47,28 @@ const stubSiteVerifyFailure = () => {
     }) as never);
 };
 
+/**
+ * Stubs siteverify so it answers with a raw body that is not JSON at all, as a
+ * Google-side gateway error page would be.
+ */
+const stubSiteVerifyRawBody = (raw: string) => {
+    httpsRequest.mockImplementation(((_options: unknown, cb: any) => {
+        const res = new EventEmitter();
+        const req = Object.assign(new EventEmitter(), {
+            write: () => true,
+            end: () => {
+                setImmediate(() => {
+                    cb(res);
+                    res.emit("data", raw);
+                    res.emit("end");
+                });
+            },
+            destroy: () => undefined,
+        });
+        return req;
+    }) as never);
+};
+
 const buildEvent = (body: Record<string, unknown>): APIGatewayEvent =>
     ({
         resource: "/",
@@ -318,5 +340,48 @@ describe("submitter data never reaches the logs", () => {
         expect(logged).not.toContain("Jane");
         expect(logged).not.toContain("jane.applicant@example.com");
         expect(JSON.stringify(response)).not.toContain("Jane");
+    });
+});
+
+describe("reCAPTCHA fail-closed edge cases", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        jest.spyOn(console, "warn").mockImplementation(() => {});
+        jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    it("rejects an empty token without ever calling siteverify", async () => {
+        // An empty string satisfies the AJV schema (present, type string), so
+        // this reaches the verifier and must not be treated as a pass.
+        stubSiteVerify({ success: true, score: 0.9 });
+
+        const response = await invoke(
+            makeHandler(),
+            buildEvent({ ...VALID_BODY, recaptcha: "" })
+        );
+
+        expect(response.statusCode).toBe(400);
+        expect(httpsRequest).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when siteverify answers with a non-JSON body", async () => {
+        stubSiteVerifyRawBody("<html><body>502 Bad Gateway</body></html>");
+
+        const response = await invoke(makeHandler(), buildEvent(VALID_BODY));
+
+        expect(response.statusCode).toBe(400);
+        expect(JSON.parse(response.body).message).toBe("reCAPTCHA failed");
+    });
+
+    it("fails closed when siteverify answers with truncated JSON", async () => {
+        stubSiteVerifyRawBody('{"success": true, "score": 0.9');
+
+        const response = await invoke(makeHandler(), buildEvent(VALID_BODY));
+
+        expect(response.statusCode).toBe(400);
     });
 });

@@ -93,7 +93,17 @@ Before publishing, ensure `npm run build` completes without errors and that the 
 
 ## Testing Notes
 
-The included tests exercise the handler with `disableSend: true`. When writing your own tests, prefer the same flag or mock Nodemailer to avoid hitting SES.
+The suite covers payload validation, reCAPTCHA verification, multipart parsing
+with file attachments, and the SES send path, and runs on Node 20 and 22 in CI.
+
+Two approaches are used, and either works for your own tests:
+
+- **`disableSend: true`** skips the SES call entirely and still returns success.
+  Simplest when the SES call is not what you are testing.
+- **Stubbing `@aws-sdk/client-sesv2`** with `jest.unstable_mockModule`, as
+  `src/sesTransport.spec.ts` does, when you need to assert on what was actually
+  sent. The stub replaces `SESv2Client` and `SendEmailCommand`, so the real
+  nodemailer transport still runs and builds the raw message — no network calls.
 
 To generate a realistic event payload for manual testing, use the [API Gateway Lambda proxy](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html) structure and provide either a JSON body or a base64-encoded multipart payload.
 

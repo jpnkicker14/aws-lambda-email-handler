@@ -8,8 +8,15 @@ on:
 
 jobs:
   build:
-    name: Build
+    name: Build and test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor declared in engines; 22 is the Lambda runtime
+        # consumers deploy on (nodejs22.x).
+        node-version: ["20", "22"]
 
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +24,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node-version }}
           cache: "npm"
 
       - name: Install dependencies
@@ -25,3 +32,6 @@ jobs:
 
       - name: Type check
         run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
